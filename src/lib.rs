@@ -1,11 +1,44 @@
 #[cfg(target_os = "android")]
 #[allow(non_snake_case)]
 pub mod android {
-    use crate::native::add;
-    use crate::native::print_hello;
-    use jni::objects::JClass;
-    use jni::sys::{jint, jstring};
+    use crate::native::{add, perfect_numbers, print_hello};
+    use jni::objects::{JClass, JObject, JString, JValue};
+    use jni::sys::{jint, jintArray, jstring};
     use jni::JNIEnv;
+
+    struct AndroidLogger<'local> {
+        /// Reference to the android.util.Log class.
+        log_class: JClass<'local>,
+        /// Tag for log messages.
+        tag: JString<'local>,
+    }
+
+    impl<'local> AndroidLogger<'local> {
+        pub fn new(env: &mut JNIEnv<'local>, tag: &str) -> Result<Self, jni::errors::Error> {
+            Ok(Self {
+                log_class: env.find_class("android/util/Log")?,
+                tag: env.new_string(tag)?,
+            })
+        }
+
+        /// Prints a message at the debug level.
+        pub fn d(
+            &self,
+            env: &mut JNIEnv<'local>,
+            message: impl AsRef<str>,
+        ) -> Result<(), jni::errors::Error> {
+            env.call_static_method(
+                &self.log_class,
+                "d",
+                "(Ljava/lang/String;Ljava/lang/String;)I",
+                &[
+                    JValue::Object(&self.tag),
+                    JValue::Object(&JObject::from(env.new_string(message)?)),
+                ],
+            )?;
+            Ok(())
+        }
+    }
 
     #[no_mangle]
     pub unsafe extern "system" fn Java_com_santifa_android_1rust_NativeLibrary_helloWorld<
@@ -35,15 +68,21 @@ pub mod android {
     pub unsafe extern "system" fn Java_com_santifa_android_1rust_NativeLibrary_perfectNumbers<
         'local,
     >(
-        env: JNIEnv<'local>,
+        mut env: JNIEnv<'local>,
         _: JClass<'local>,
         input: jint,
-    ) -> jstring {
-        let result = String::from("Nothin implemented");
-        let output = env
-            .new_string(result)
-            .expect("Couldn't create java string!");
-        output.into_raw()
+    ) -> jintArray {
+        let logger =
+            AndroidLogger::new(&mut env, "android_rust_lib").expect("Could not build logger");
+        let _ = logger.d(&mut env, "Called rust lib");
+        let numbers = perfect_numbers(input);
+        let _ = logger.d(&mut env, "Calculated perfect numbers");
+        let int_array = env
+            .new_int_array(numbers.len() as i32)
+            .expect("Failed to generate array");
+        let _ = logger.d(&mut env, "Converted numbers to Java array");
+        let _ = env.set_int_array_region(&int_array, 0, &numbers);
+        int_array.into_raw()
     }
 }
 
@@ -81,6 +120,29 @@ pub mod native {
         )))]
         return "unknown";
     }
+
+    pub fn perfect_numbers(input: i32) -> Vec<i32> {
+        (2..input + 1)
+            .filter(|x| x % 2 != 1)
+            .filter(is_perfect)
+            .collect()
+    }
+
+    fn is_perfect(n: &i32) -> bool {
+        let mut tot = 1;
+        let mut q: i32;
+
+        for i in 2..(*n as f32).sqrt() as i32 + 1 {
+            if n % i == 0 {
+                tot += i;
+                q = n / i;
+                if q > i {
+                    tot += q
+                }
+            }
+        }
+        tot == *n
+    }
 }
 
 #[cfg(test)]
@@ -88,8 +150,14 @@ mod tests {
     use crate::native::*;
 
     #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
+    fn test_perfect_numbers() {
+        let numbers = perfect_numbers(100);
+        assert_eq!(numbers, vec![6, 28])
+    }
+
+    #[test]
+    fn test_perfect_numbers_huge() {
+        let numbers = perfect_numbers(33550336);
+        assert_eq!(numbers, vec![6, 28, 496, 8128, 33550336])
     }
 }
